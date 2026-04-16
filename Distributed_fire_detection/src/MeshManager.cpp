@@ -30,6 +30,7 @@ namespace MeshManager {
             neighbors[idx].lastSeq = data->seqNum;
             neighbors[idx].nodeId = data->nodeId;
             neighbors[idx].temperature = data->temperature;
+            neighbors[idx].tempVariance = data->tempVariance;
             neighbors[idx].humidity = data->humidity;
             neighbors[idx].pressure = data->pressure;
         } else if (neighborCount < MAX_NEIGHBORS) {
@@ -39,6 +40,7 @@ namespace MeshManager {
             neighbors[neighborCount].lastSeen = millis();
             neighbors[neighborCount].lastSeq = data->seqNum;
             neighbors[neighborCount].temperature = data->temperature;
+            neighbors[neighborCount].tempVariance = data->tempVariance;
             neighbors[neighborCount].humidity = data->humidity;
             neighbors[neighborCount].pressure = data->pressure;
             
@@ -94,16 +96,17 @@ namespace MeshManager {
         esp_now_send(broadcastAddress, (uint8_t *) &data, sizeof(data));
     }
 
-    void printStatus(uint32_t localNodeId, float localTemp, float localHum, float localPres) {
+    void printStatus(uint32_t localNodeId, float localTemp, float localConf) {
         uint32_t uptimeSec = millis() / 1000;
         Serial.printf("\n[STATUS] Node: %d | Uptime: %u s | Neighbors: %d\n", localNodeId, uptimeSec, neighborCount);
-        Serial.printf("  -> Local Sensor: Temp=%.2f*C, Hum=%.2f%%, Pres=%.2fhPa\n", localTemp, localHum, localPres);
+        Serial.printf("  -> Local Sensor: Temp=%.2f*C | Conf=%.1f%%\n", localTemp, localConf);
 
         if (neighborCount > 0) {
             Serial.println("--- Neighbor List ---");
             for (int i = 0; i < neighborCount; i++) {
-                Serial.printf("  ID: %d | Temp: %.2f*C | Hum: %.2f%% | Seq: %u | MAC: ", 
-                              neighbors[i].nodeId, neighbors[i].temperature, neighbors[i].humidity, neighbors[i].lastSeq);
+                float nConf = 100.0f * exp(-0.346f * neighbors[i].tempVariance);
+                Serial.printf("  ID: %d | Temp: %.2f*C (Conf: %.1f%%) | Seq: %u | MAC: ", 
+                              neighbors[i].nodeId, neighbors[i].temperature, nConf, neighbors[i].lastSeq);
                 printMac(neighbors[i].mac);
                 Serial.println();
             }

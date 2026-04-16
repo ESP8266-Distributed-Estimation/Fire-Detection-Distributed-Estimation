@@ -4,11 +4,19 @@
 #include "Types.h"
 #include "SensorManager.h"
 #include "MeshManager.h"
+#include "KalmanFilter.h"
 
 uint32_t lastPingTime = 0;
 uint32_t lastLogTime = 0;
 uint32_t seqCounter = 0;
 struct_message myData;
+
+// Kalman Filter for Temperature:
+// R (Measurement Noise) = 0.5 (Sensor inaccuracy variance)
+// P (Initial Error Estimate) = 1.0 
+// Q (Process Noise) = 0.05 (True temp doesn't jump quickly unless fire)
+// Initial value = 25.0 C (approx room temp)
+KalmanFilter tempFilter(0.5f, 1.0f, 0.05f, 25.0f);
 
 void setup() {
     Serial.begin(115200);
@@ -42,10 +50,15 @@ void loop() {
         float temp, hum, pres;
         SensorManager::readData(temp, hum, pres);
 
+        // Filter the temperature using Kalman Filter
+        float filteredTemp = tempFilter.updateEstimate(temp);
+        float tempVar = tempFilter.getVariance();
+
         // Prepare packet
         myData.nodeId = NODE_ID;
         myData.seqNum = seqCounter++;
-        myData.temperature = temp;
+        myData.temperature = filteredTemp;
+        myData.tempVariance = tempVar;
         myData.humidity = hum;
         myData.pressure = pres;
 
@@ -60,9 +73,7 @@ void loop() {
 
         MeshManager::cleanStaleNeighbors();
         
-        float localTemp, localHum, localPres;
-        SensorManager::readData(localTemp, localHum, localPres);
-
-        MeshManager::printStatus(NODE_ID, localTemp, localHum, localPres);
+        float localConf = tempFilter.getConfidence();
+        MeshManager::printStatus(NODE_ID, myData.temperature, localConf);
     }
 }

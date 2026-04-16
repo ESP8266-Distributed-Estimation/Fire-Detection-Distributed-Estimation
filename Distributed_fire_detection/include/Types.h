@@ -6,6 +6,7 @@ typedef struct struct_message {
     uint32_t nodeId;
     uint32_t seqNum;
     float temperature;
+    float tempVariance;
     float humidity;
     float pressure;
 } struct_message;
@@ -17,6 +18,7 @@ typedef struct {
     uint32_t lastSeen;
     uint32_t lastSeq;
     float temperature;
+    float tempVariance;
     float humidity;
     float pressure;
 } Neighbor;
