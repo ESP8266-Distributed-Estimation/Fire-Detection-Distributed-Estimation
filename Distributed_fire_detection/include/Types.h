@@ -7,6 +7,10 @@ typedef struct struct_message {
     uint32_t seqNum;
     float temperature;
     float tempVariance;
+    float dT;
+    float dtVariance;
+    uint32_t alarmSourceId;
+    uint32_t alarmSeqNum;
 } struct_message;
 
 // Local entry for each discovered neighbor
@@ -17,4 +21,6 @@ typedef struct {
     uint32_t lastSeq;
     float temperature;
     float tempVariance;
+    float dT;
+    float dtVariance;
 } Neighbor;

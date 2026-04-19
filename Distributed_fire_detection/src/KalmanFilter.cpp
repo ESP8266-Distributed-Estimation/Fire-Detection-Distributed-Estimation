@@ -1,64 +1,89 @@
 #include "../include/KalmanFilter.h"
 #include <math.h>
 
-KalmanFilter::KalmanFilter(float mea_e, float est_e, float q, float initial_value) {
-    _err_measure = mea_e;   // Sensor noise variance R
-    _err_estimate = est_e;  // Initial estimation error covariance P
-    _q = q;                 // Process noise variance Q
-    _current_estimate = initial_value;
-    _last_estimate = initial_value;
-    _last_innovation = 0.0f;
+KalmanFilter::KalmanFilter(float r, float q_temp, float q_dt, float initial_temp) {
+    _r = r;
+    _q_temp = q_temp;
+    _q_dt = q_dt;
+    
+    _x_temp = initial_temp;
+    _x_dt = 0.0f;
+    
+    // Initial uncertainty
+    _p[0][0] = 1.0f;
+    _p[0][1] = 0.0f;
+    _p[1][0] = 0.0f;
+    _p[1][1] = 1.0f;
+    
+    _last_time = 0;
+    _is_initialized = false;
 }
 
 float KalmanFilter::updateEstimate(float mea) {
-    // Prediction update
-    // State prediction: x_{k|k-1} = x_{k-1|k-1}
-    // Estimation error covariance prediction: P_{k|k-1} = P_{k-1|k-1} + Q
-    _err_estimate = _err_estimate + _q;
-
-    // Measurement update
-    // Kalman gain: K_k = P_{k|k-1} / (P_{k|k-1} + R)
-    float kalman_gain = _err_estimate / (_err_estimate + _err_measure);
+    uint32_t now = millis();
     
-    // Innovation (residual)
-    _last_innovation = mea - _last_estimate;
-
-    // State estimate update: x_{k|k} = x_{k|k-1} + K_k(z_k - x_{k|k-1})
-    _current_estimate = _last_estimate + kalman_gain * _last_innovation;
+    if (!_is_initialized) {
+        _last_time = now;
+        _is_initialized = true;
+        _x_temp = mea;
+        return _x_temp;
+    }
     
-    // Estimation error covariance update: P_{k|k} = (1 - K_k)P_{k|k-1}
-    _err_estimate = (1.0f - kalman_gain) * _err_estimate;
+    float dt = (now - _last_time) / 1000.0f; // time delta in seconds
+    if (dt <= 0.0f) dt = 0.001f;
+    _last_time = now;
+
+    // --- PREDICT ---
+    // X_pred = F * X
+    float x_temp_pred = _x_temp + dt * _x_dt;
+    float x_dt_pred = _x_dt;
+
+    // P_pred = F * P * F^T + Q
+    float p00_pred = _p[0][0] + dt * (_p[1][0] + _p[0][1]) + dt * dt * _p[1][1] + _q_temp;
+    float p01_pred = _p[0][1] + dt * _p[1][1];
+    float p10_pred = _p[1][0] + dt * _p[1][1];
+    float p11_pred = _p[1][1] + _q_dt;
+
+    // --- UPDATE ---
+    // Innovation y = Z - H * X_pred
+    float y = mea - x_temp_pred;
     
-    // Setup for next iteration
-    _last_estimate = _current_estimate;
+    // Innovation covariance S = H * P_pred * H^T + R
+    float S = p00_pred + _r;
+    
+    // Kalman Gain K = P_pred * H^T * S^-1
+    float K0 = p00_pred / S;
+    float K1 = p10_pred / S;
 
-    return _current_estimate;
+    // State update X = X_pred + K * y
+    _x_temp = x_temp_pred + K0 * y;
+    _x_dt = x_dt_pred + K1 * y;
+
+    // Covariance update P = (I - K * H) * P_pred
+    _p[0][0] = (1.0f - K0) * p00_pred;
+    _p[0][1] = (1.0f - K0) * p01_pred;
+    _p[1][0] = -K1 * p00_pred + p10_pred;
+    _p[1][1] = -K1 * p01_pred + p11_pred;
+
+    return _x_temp;
 }
 
-float KalmanFilter::getVariance() const {
-    return _err_estimate;
+float KalmanFilter::getTempVariance() const {
+    return _p[0][0];
 }
 
-void KalmanFilter::setMeasurementError(float mea_e) {
-    _err_measure = mea_e;
+float KalmanFilter::getDtVariance() const {
+    return _p[1][1];
 }
 
-void KalmanFilter::setEstimateError(float est_e) {
-    _err_estimate = est_e;
-}
-
-void KalmanFilter::setProcessNoise(float q) {
-    _q = q;
+float KalmanFilter::getDt() const {
+    return _x_dt;
 }
 
 float KalmanFilter::getConfidence() const {
-    // Confidence heuristic: map variance and recent innovation to 0-100%
-    // A variance of 0.0 means 100% confidence.
-    // If the temperature is changing rapidly (high innovation), confidence drops.
+    // Keep a simple heuristic based on temp variance for UI if needed
     float lambda = 0.346f;
-    float dynamic_variance = _err_estimate + (_last_innovation * _last_innovation * 2.0f); 
-    float conf = 100.0f * exp(-lambda * dynamic_variance);
-    // ensure confidence is within 0-100
+    float conf = 100.0f * exp(-lambda * _p[0][0]);
     if(conf < 0.0f) conf = 0.0f;
     if(conf > 100.0f) conf = 100.0f;
     return conf;

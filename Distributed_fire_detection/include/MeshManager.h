@@ -6,5 +6,7 @@ namespace MeshManager {
     void init();
     void broadcast(struct_message &data);
     void cleanStaleNeighbors();
-    void printStatus(uint32_t localNodeId, float localTemp, float localConf);
+    void cleanStaleAlarms();
+    void evaluateConsensus(uint32_t localNodeId, float localTemp, float localVar, float localDt, float localDtVar, float &consensusTemp, float &consensusDt, bool &fireAlarm, uint32_t &outAlarmSourceId, uint32_t &outAlarmSeqNum);
+    void printStatus(uint32_t localNodeId, float localTemp, float localDt, float consensusTemp, float consensusDt, bool fireAlarm);
 }

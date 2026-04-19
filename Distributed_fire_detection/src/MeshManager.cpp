@@ -8,6 +8,14 @@ namespace MeshManager {
     int neighborCount = 0;
     uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
+    typedef struct {
+        uint32_t sourceNodeId;
+        uint32_t maxSeqNum;
+        uint32_t lastReceived;
+    } AlarmRecord;
+
+    AlarmRecord alarmCache[MAX_ACTIVE_ALARMS];
+
     void printMac(const uint8_t *mac) {
         for (int i = 0; i < 6; i++) {
             Serial.printf("%02X", mac[i]);
@@ -22,7 +30,36 @@ namespace MeshManager {
         return -1;
     }
 
+    void processIncomingAlarm(uint32_t sourceId, uint32_t seqNum) {
+        if (sourceId == 0) return;          // No alarm
+        if (sourceId == NODE_ID) return;    // Ignore our own echoed alarms
+
+        int emptyIdx = -1;
+        for (int i = 0; i < MAX_ACTIVE_ALARMS; i++) {
+            if (alarmCache[i].sourceNodeId == sourceId) {
+                // Found existing record for this fire
+                if (seqNum > alarmCache[i].maxSeqNum) {
+                    alarmCache[i].maxSeqNum = seqNum;
+                    alarmCache[i].lastReceived = millis();
+                }
+                return;
+            }
+            if (alarmCache[i].sourceNodeId == 0 && emptyIdx == -1) {
+                emptyIdx = i;
+            }
+        }
+        
+        // Not found, add to empty slot
+        if (emptyIdx != -1) {
+            alarmCache[emptyIdx].sourceNodeId = sourceId;
+            alarmCache[emptyIdx].maxSeqNum = seqNum;
+            alarmCache[emptyIdx].lastReceived = millis();
+        }
+    }
+
     void updateNeighbor(const uint8_t *mac, const struct_message *data) {
+        processIncomingAlarm(data->alarmSourceId, data->alarmSeqNum);
+
         int idx = findNeighbor(mac);
         if (idx != -1) {
             // Existing neighbor: update their record
@@ -31,6 +68,8 @@ namespace MeshManager {
             neighbors[idx].nodeId = data->nodeId;
             neighbors[idx].temperature = data->temperature;
             neighbors[idx].tempVariance = data->tempVariance;
+            neighbors[idx].dT = data->dT;
+            neighbors[idx].dtVariance = data->dtVariance;
         } else if (neighborCount < MAX_NEIGHBORS) {
             // New neighbor: register them
             memcpy(neighbors[neighborCount].mac, mac, 6);
@@ -39,6 +78,8 @@ namespace MeshManager {
             neighbors[neighborCount].lastSeq = data->seqNum;
             neighbors[neighborCount].temperature = data->temperature;
             neighbors[neighborCount].tempVariance = data->tempVariance;
+            neighbors[neighborCount].dT = data->dT;
+            neighbors[neighborCount].dtVariance = data->dtVariance;
             
             Serial.print("\n[DISCOVERED] Node ID: ");
             Serial.print(data->nodeId);
@@ -60,6 +101,18 @@ namespace MeshManager {
                 }
                 neighborCount--;
                 i--; // Re-check this index
+            }
+        }
+    }
+
+    void cleanStaleAlarms() {
+        uint32_t now = millis();
+        for (int i = 0; i < MAX_ACTIVE_ALARMS; i++) {
+            if (alarmCache[i].sourceNodeId != 0) {
+                if (now - alarmCache[i].lastReceived > ALARM_FORGET_MS) {
+                    alarmCache[i].sourceNodeId = 0;
+                    alarmCache[i].maxSeqNum = 0;
+                }
             }
         }
     }
@@ -92,21 +145,129 @@ namespace MeshManager {
         esp_now_send(broadcastAddress, (uint8_t *) &data, sizeof(data));
     }
 
-    void printStatus(uint32_t localNodeId, float localTemp, float localConf) {
+    void evaluateConsensus(uint32_t localNodeId, float localTemp, float localVar, float localDt, float localDtVar, float &consensusTemp, float &consensusDt, bool &fireAlarm, uint32_t &outAlarmSourceId, uint32_t &outAlarmSeqNum) {
+        float sumTempWeights = 0.0f;
+        float sumWeightedTemps = 0.0f;
+        float sumDtWeights = 0.0f;
+        float sumWeightedDts = 0.0f;
+        
+        // 1. Include local node in consensus
+        float localTempWeight = 1.0f / (localVar + 0.001f);
+        sumTempWeights += localTempWeight;
+        sumWeightedTemps += localTempWeight * localTemp;
+        
+        float localDtWeight = 1.0f / (localDtVar + 0.001f);
+        sumDtWeights += localDtWeight;
+        sumWeightedDts += localDtWeight * localDt;
+        
+        // 2. Iterate through neighbors
+        for (int i = 0; i < neighborCount; i++) {
+            float nTemp = neighbors[i].temperature;
+            float nVar = neighbors[i].tempVariance;
+            float nDt = neighbors[i].dT;
+            float nDtVar = neighbors[i].dtVariance;
+            
+            float nTempWeight = 1.0f / (nVar + 0.001f);
+            sumTempWeights += nTempWeight;
+            sumWeightedTemps += nTempWeight * nTemp;
+            
+            float nDtWeight = 1.0f / (nDtVar + 0.001f);
+            sumDtWeights += nDtWeight;
+            sumWeightedDts += nDtWeight * nDt;
+        }
+        
+        // 3. Finalize Output
+        consensusTemp = sumWeightedTemps / sumTempWeights;
+        consensusDt = sumWeightedDts / sumDtWeights;
+        
+        // 4. Alarm Logic (OR Condition)
+        bool consensusAbsoluteAlarm = (consensusTemp > CRITICAL_TEMP);
+        bool consensusFastRiseAlarm = (consensusDt > CRITICAL_DT) && (consensusTemp > BASELINE_TEMP);
+        
+        bool localAbsoluteAlarm = (localTemp > CRITICAL_TEMP);
+        bool localFastRiseAlarm = (localDt > CRITICAL_DT) && (localTemp > BASELINE_TEMP);
+        
+        bool localTrigger = consensusAbsoluteAlarm || consensusFastRiseAlarm || localAbsoluteAlarm || localFastRiseAlarm;
+
+        if (localTrigger) {
+            fireAlarm = true;
+            outAlarmSourceId = localNodeId;
+        } else {
+            // Check cache for propagated alarms
+            fireAlarm = false;
+            outAlarmSourceId = 0;
+            outAlarmSeqNum = 0;
+            for (int i = 0; i < MAX_ACTIVE_ALARMS; i++) {
+                if (alarmCache[i].sourceNodeId != 0) {
+                    if (millis() - alarmCache[i].lastReceived <= ALARM_TIMEOUT_MS) {
+                        fireAlarm = true;
+                        outAlarmSourceId = alarmCache[i].sourceNodeId;
+                        outAlarmSeqNum = alarmCache[i].maxSeqNum;
+                        break; // Just grab the first active one to propagate
+                    }
+                }
+            }
+        }
+    }
+
+    void printStatus(uint32_t localNodeId, float localTemp, float localDt, float consensusTemp, float consensusDt, bool fireAlarm) {
         uint32_t uptimeSec = millis() / 1000;
         Serial.printf("\n[STATUS] Node: %d | Uptime: %u s | Neighbors: %d\n", localNodeId, uptimeSec, neighborCount);
-        Serial.printf("  -> Local Sensor: Temp=%.2f*C | Conf=%.1f%%\n", localTemp, localConf);
+        Serial.printf("  -> Local Sensor: Temp=%.2f*C | dT=%.3f*C/s\n", localTemp, localDt);
+        
+        if (fireAlarm) {
+            // Determine the primary cause of the alarm for logging
+            bool cAbs = (consensusTemp > CRITICAL_TEMP);
+            bool cFast = (consensusDt > CRITICAL_DT) && (consensusTemp > BASELINE_TEMP);
+            bool lAbs = (localTemp > CRITICAL_TEMP);
+            bool lFast = (localDt > CRITICAL_DT) && (localTemp > BASELINE_TEMP);
+            
+            String cause = "NETWORK ALARM PROPAGATED";
+            if (cAbs || cFast) cause = "CONSENSUS CRITICAL";
+            else if (lAbs || lFast) cause = "LOCAL FIRE DETECTED";
+            else {
+                for (int i = 0; i < neighborCount; i++) {
+                    if (neighbors[i].temperature > CRITICAL_TEMP || 
+                       (neighbors[i].dT > CRITICAL_DT && neighbors[i].temperature > BASELINE_TEMP)) {
+                        cause = "NEIGHBOR " + String(neighbors[i].nodeId) + " DETECTED FIRE";
+                        break;
+                    }
+                }
+            }
+            Serial.printf("  -> NETWORK CONSENSUS: Temp=%.2f*C | dT=%.3f*C/s [!!! FIRE ALARM: %s !!!]\n", consensusTemp, consensusDt, cause.c_str());
+        } else {
+            Serial.printf("  -> NETWORK CONSENSUS: Temp=%.2f*C | dT=%.3f*C/s [Normal]\n", consensusTemp, consensusDt);
+        }
 
         if (neighborCount > 0) {
             Serial.println("--- Neighbor List ---");
             for (int i = 0; i < neighborCount; i++) {
-                float nConf = 100.0f * exp(-0.346f * neighbors[i].tempVariance);
-                Serial.printf("  ID: %d | Temp: %.2f*C (Conf: %.1f%%) | Seq: %u | MAC: ", 
-                              neighbors[i].nodeId, neighbors[i].temperature, nConf, neighbors[i].lastSeq);
+                Serial.printf("  ID: %d | Temp: %.2f*C (Var: %.3f) | dT: %.3f*C/s (Var: %.3f) | Seq: %u | MAC: ", 
+                              neighbors[i].nodeId, neighbors[i].temperature, neighbors[i].tempVariance, 
+                              neighbors[i].dT, neighbors[i].dtVariance, neighbors[i].lastSeq);
                 printMac(neighbors[i].mac);
                 Serial.println();
             }
             Serial.println("---------------------");
         }
+
+        // Print active alarms from cache
+        bool headerPrinted = false;
+        for (int i = 0; i < MAX_ACTIVE_ALARMS; i++) {
+            if (alarmCache[i].sourceNodeId != 0) {
+                uint32_t age = millis() - alarmCache[i].lastReceived;
+                if (age <= ALARM_TIMEOUT_MS) {
+                    if (!headerPrinted) {
+                        Serial.println("--- Active Propagated Alarms ---");
+                        headerPrinted = true;
+                    }
+                    Serial.printf("  Source ID: %d | Max Seq: %u | Age: %u ms\n", 
+                                  alarmCache[i].sourceNodeId, 
+                                  alarmCache[i].maxSeqNum, 
+                                  age);
+                }
+            }
+        }
+        if (headerPrinted) Serial.println("--------------------------------");
     }
 }
