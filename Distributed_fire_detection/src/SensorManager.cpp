@@ -30,33 +30,29 @@ namespace SensorManager {
         if (isInitialized) {
             // Set up oversampling and filter initialization
             bme.setSampling(Adafruit_BME280::MODE_FORCED,
-                            Adafruit_BME280::SAMPLING_X1, // temperature
-                            Adafruit_BME280::SAMPLING_X1, // pressure
-                            Adafruit_BME280::SAMPLING_X1, // humidity
+                            Adafruit_BME280::SAMPLING_X1,   // temperature
+                            Adafruit_BME280::SAMPLING_NONE, // pressure
+                            Adafruit_BME280::SAMPLING_NONE, // humidity
                             Adafruit_BME280::FILTER_OFF   );
         }
     }
 
-    void readData(float &temperature, float &humidity, float &pressure) {
+    void readData(float &temperature) {
         if (isInitialized) {
             // Force the sensor to take a new reading before pulling values
             bme.takeForcedMeasurement();
             
             temperature = bme.readTemperature();
-            humidity = bme.readHumidity();
-            pressure = bme.readPressure() / 100.0F; // Convert Pa to hPa
             
             // Basic sanity check: if reading fails completely, it often returns exactly 0.0 or stays stuck.
             // If it returns NAN or is somehow disconnected during runtime:
-            if (isnan(temperature) || isnan(humidity)) {
+            if (isnan(temperature)) {
                 Serial.println("Sensor read failed, re-initializing...");
                 init(); // Try to restart the sensor bus
             }
         } else {
             // Return NAN if sensor is missing so mesh doesn't break
             temperature = NAN;
-            humidity = NAN;
-            pressure = NAN;
         }
     }
 }

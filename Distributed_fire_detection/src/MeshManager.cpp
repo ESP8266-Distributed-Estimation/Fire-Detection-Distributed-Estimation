@@ -31,8 +31,6 @@ namespace MeshManager {
             neighbors[idx].nodeId = data->nodeId;
             neighbors[idx].temperature = data->temperature;
             neighbors[idx].tempVariance = data->tempVariance;
-            neighbors[idx].humidity = data->humidity;
-            neighbors[idx].pressure = data->pressure;
         } else if (neighborCount < MAX_NEIGHBORS) {
             // New neighbor: register them
             memcpy(neighbors[neighborCount].mac, mac, 6);
@@ -41,8 +39,6 @@ namespace MeshManager {
             neighbors[neighborCount].lastSeq = data->seqNum;
             neighbors[neighborCount].temperature = data->temperature;
             neighbors[neighborCount].tempVariance = data->tempVariance;
-            neighbors[neighborCount].humidity = data->humidity;
-            neighbors[neighborCount].pressure = data->pressure;
             
             Serial.print("\n[DISCOVERED] Node ID: ");
             Serial.print(data->nodeId);

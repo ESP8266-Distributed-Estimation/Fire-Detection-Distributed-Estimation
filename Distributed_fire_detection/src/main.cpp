@@ -47,8 +47,8 @@ void loop() {
         lastPingTime = now;
 
         // Read sensor data
-        float temp, hum, pres;
-        SensorManager::readData(temp, hum, pres);
+        float temp;
+        SensorManager::readData(temp);
 
         // Filter the temperature using Kalman Filter
         float filteredTemp = tempFilter.updateEstimate(temp);
@@ -59,8 +59,6 @@ void loop() {
         myData.seqNum = seqCounter++;
         myData.temperature = filteredTemp;
         myData.tempVariance = tempVar;
-        myData.humidity = hum;
-        myData.pressure = pres;
 
         // Broadcast
         MeshManager::broadcast(myData);
