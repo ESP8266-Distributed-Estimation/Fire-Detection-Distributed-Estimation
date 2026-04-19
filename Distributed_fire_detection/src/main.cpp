@@ -16,9 +16,12 @@ struct_message myData;
 // P (Initial Error Estimate) = 1.0 
 // Q (Process Noise) = 0.05 (True temp doesn't jump quickly unless fire)
 // Initial value = 25.0 C (approx room temp)
-KalmanFilter tempFilter(0.5f, 1.0f, 0.05f, 25.0f);
+KalmanParams params = getKalmanParams(NODE_ID);
+KalmanFilter tempFilter(params.R, 1.0f, params.Q, 25.0f);
 
 void setup() {
+    tempFilter.setBias(params.bias);
+    Serial.printf("KF Params -> R: %.3f, Bias: %.3f, Q: %.6f\n", params.R, params.bias, params.Q);
     Serial.begin(115200);
     delay(2000);
 
