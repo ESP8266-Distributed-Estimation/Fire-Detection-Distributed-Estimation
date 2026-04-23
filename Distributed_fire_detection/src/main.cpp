@@ -32,6 +32,11 @@ void setup() {
     // Prepare WiFi for ESP-NOW
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    
+    // Force WiFi channel to match Gateway (must be same as Edge_node WIFI_CHANNEL)
+    wifi_promiscuous_enable(1);
+    wifi_set_channel(1);
+    wifi_promiscuous_enable(0);
 
     // Initialize modules
     SensorManager::init();

@@ -20,6 +20,14 @@ namespace NetworkManager {
     volatile int queueTail = 0;
     struct_message packetQueue[QUEUE_SIZE];
 
+    #define MAX_KNOWN_NODES 50
+    struct KnownNode {
+        uint32_t id;
+        uint32_t lastSeen;
+    };
+    KnownNode knownNodes[MAX_KNOWN_NODES];
+    int knownNodeCount = 0;
+
     void pushToQueue(const struct_message* data) {
         int nextHead = (queueHead + 1) % QUEUE_SIZE;
         if (nextHead != queueTail) { // Not full
@@ -113,11 +121,30 @@ namespace NetworkManager {
         uint32_t now = millis();
         if (now - lastStatusTime >= STATUS_INTERVAL_MS) {
             lastStatusTime = now;
+            
+            // Prune stale nodes before publishing
+            for (int i = 0; i < knownNodeCount; i++) {
+                if (now - knownNodes[i].lastSeen >= NODE_TIMEOUT_MS) {
+                    Serial.printf("[Gateway] Sensor node %u went offline.\n", knownNodes[i].id);
+                    // Shift array left to remove
+                    for (int j = i; j < knownNodeCount - 1; j++) {
+                        knownNodes[j] = knownNodes[j + 1];
+                    }
+                    knownNodeCount--;
+                    i--; // Re-check this index since we shifted
+                }
+            }
+            
             if (mqttClient.connected()) {
                 JsonDocument doc;
                 doc["edge_node_id"] = EDGE_NODE_ID;
                 doc["status"] = "online";
                 doc["uptime"] = now / 1000;
+                
+                JsonArray nodes = doc["connected_nodes"].to<JsonArray>();
+                for (int i = 0; i < knownNodeCount; i++) {
+                    nodes.add(knownNodes[i].id);
+                }
                 
                 String output;
                 serializeJson(doc, output);
@@ -150,6 +177,23 @@ namespace NetworkManager {
     void processQueuedPackets() {
         struct_message packet;
         while (popFromQueue(&packet)) {
+            uint32_t now = millis();
+            // Check if this is a newly discovered node
+            bool isNewNode = true;
+            for (int i = 0; i < knownNodeCount; i++) {
+                if (knownNodes[i].id == packet.nodeId) {
+                    knownNodes[i].lastSeen = now;
+                    isNewNode = false;
+                    break;
+                }
+            }
+            if (isNewNode && knownNodeCount < MAX_KNOWN_NODES) {
+                knownNodes[knownNodeCount].id = packet.nodeId;
+                knownNodes[knownNodeCount].lastSeen = now;
+                knownNodeCount++;
+                Serial.printf("[Gateway] Connected to new sensor node: %u\n", packet.nodeId);
+            }
+
             // Did the incoming packet contain an active fire alarm?
             if (packet.alarmSourceId != 0) {
                 // Have we already published this exact fire sequence?
