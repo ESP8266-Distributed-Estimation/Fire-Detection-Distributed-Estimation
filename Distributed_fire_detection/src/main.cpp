@@ -30,13 +30,11 @@ void setup() {
     Serial.println("====================================");
 
     // Prepare WiFi for ESP-NOW
-    WiFi.mode(WIFI_STA);
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP("ESP_MESH_HIDDEN", "12345678", WIFI_CHANNEL, 1); // Force configured channel via hidden AP
     WiFi.disconnect();
     
-    // Force WiFi channel to match Gateway (must be same as Edge_node WIFI_CHANNEL)
-    wifi_promiscuous_enable(1);
-    wifi_set_channel(1);
-    wifi_promiscuous_enable(0);
+    // Serial.printf("Configured WiFi Channel: %d\n", wifi_get_channel());
 
     // Initialize modules
     SensorManager::init();

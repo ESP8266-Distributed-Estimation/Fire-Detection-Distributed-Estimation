@@ -119,14 +119,21 @@ namespace MeshManager {
 
     // Callbacks must be global/static in ESP8266 ESP-NOW
     void OnDataRecv(uint8_t *mac, uint8_t *incomingData, uint8_t len) {
-        if (len != sizeof(struct_message)) return;
+        // Serial.printf("\n[RAW RECV] Packet from: %02X:%02X:%02X:%02X:%02X:%02X, Len: %d\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], len);
+        if (len != sizeof(struct_message)) {
+            // Serial.printf("ERR: Recv len %d != expected %d\n", len, sizeof(struct_message));
+            return;
+        }
         struct_message recvData;
         memcpy(&recvData, incomingData, sizeof(recvData));
         updateNeighbor(mac, &recvData);
     }
 
     void OnDataSent(uint8_t *mac_addr, uint8_t status) {
-        // Optional debug logging
+        // Serial.println("Sending status: " + String(status));
+        if (status != 0) {
+            // Serial.printf("ERR: Send failed, status: %d\n", status);
+        }
     }
 
     void init() {
@@ -137,12 +144,20 @@ namespace MeshManager {
         esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
         esp_now_register_send_cb(OnDataSent);
         esp_now_register_recv_cb(OnDataRecv);
-        esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
-        Serial.println("ESP-NOW Mesh Initialized.");
+        
+        int addStatus = esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
+        if (addStatus != 0) {
+            Serial.printf("ESP-NOW Add Peer Failed: %d\n", addStatus);
+        } else {
+            Serial.println("ESP-NOW Mesh Initialized and Peer Added.");
+        }
     }
 
     void broadcast(struct_message &data) {
-        esp_now_send(broadcastAddress, (uint8_t *) &data, sizeof(data));
+        int result = esp_now_send(broadcastAddress, (uint8_t *) &data, sizeof(data));
+        if (result != 0) {
+            // Serial.printf("\n[ERROR] esp_now_send failed: %d\n", result);
+        }
     }
 
     void evaluateConsensus(uint32_t localNodeId, float localTemp, float localVar, float localDt, float localDtVar, float &consensusTemp, float &consensusDt, bool &fireAlarm, uint32_t &outAlarmSourceId, uint32_t &outAlarmSeqNum) {

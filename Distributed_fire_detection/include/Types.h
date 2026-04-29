@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 // Packet sent over ESP-NOW
-typedef struct struct_message {
+typedef struct __attribute__((packed)) struct_message {
     uint32_t nodeId;
     uint32_t seqNum;
     float temperature;

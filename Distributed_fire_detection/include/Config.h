@@ -2,7 +2,8 @@
 #include <Arduino.h>
 
 // --- Mesh Configuration ---
-#define NODE_ID 102           // Unique ID for this node
+#define NODE_ID 104           // Unique ID for this node
+#define WIFI_CHANNEL 11        // Must match your home WiFi router's channel!
 #define PING_INTERVAL_MS 2000 // Send ping every 2 seconds
 #define LOG_INTERVAL_MS 5000  // Log status every 5 seconds
 #define MAX_NEIGHBORS 10      // Max neighbors to track

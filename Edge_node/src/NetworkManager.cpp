@@ -52,14 +52,9 @@ namespace NetworkManager {
     }
 
     void connectWiFi() {
-        Serial.printf("Connecting to WiFi %s on channel %d...\n", WIFI_SSID, WIFI_CHANNEL);
+        Serial.printf("Connecting to WiFi %s...\n", WIFI_SSID);
         
-        // Critical for STA + ESP-NOW: Set channel explicitly
         WiFi.mode(WIFI_STA);
-        wifi_promiscuous_enable(1);
-        wifi_set_channel(WIFI_CHANNEL);
-        wifi_promiscuous_enable(0);
-        
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
         
         int attempts = 0;
@@ -71,6 +66,8 @@ namespace NetworkManager {
         if (WiFi.status() == WL_CONNECTED) {
             Serial.println("\nWiFi connected.");
             Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("--> NOTE: Router assigned WiFi Channel: %d\n", WiFi.channel());
+            Serial.printf("--> Please ensure Sensor Nodes use WIFI_CHANNEL %d\n", WiFi.channel());
         } else {
             Serial.println("\nWiFi connection failed! Will retry in loop.");
         }
