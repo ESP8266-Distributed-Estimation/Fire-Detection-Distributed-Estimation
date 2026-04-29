@@ -11,6 +11,7 @@ uint32_t lastLogTime = 0;
 uint32_t seqCounter = 0;
 uint32_t myAlarmSeqNum = 1; // Tracks the sequence of our own generated alarms
 struct_message myData;
+float lastFilteredTemp = 25.0f;
 
 // Kalman Filter for Temperature:
 // R (Measurement Noise) = 0.5 (Sensor inaccuracy variance)
@@ -64,7 +65,9 @@ void loop() {
         float localDtVar = tempFilter.getDtVariance();
         
         float consensusTemp = 0.0f;
+        float consensusVar = 0.0f;
         float consensusDt = 0.0f;
+        float consensusDtVar = 0.0f;
         bool fireAlarm = false;
         uint32_t outAlarmSourceId = 0;
         uint32_t outAlarmSeqNum = 0;
@@ -72,16 +75,27 @@ void loop() {
         // Clean stale neighbors before consensus to avoid stale alarms
         MeshManager::cleanStaleNeighbors();
         MeshManager::cleanStaleAlarms();
-        MeshManager::evaluateConsensus(NODE_ID, filteredTemp, localVar, localDt, localDtVar, consensusTemp, consensusDt, fireAlarm, outAlarmSourceId, outAlarmSeqNum);
+        MeshManager::evaluateConsensus(NODE_ID, filteredTemp, localVar, localDt, localDtVar, consensusTemp, consensusVar, consensusDt, consensusDtVar, fireAlarm, outAlarmSourceId, outAlarmSeqNum);
+
+        lastFilteredTemp = filteredTemp;
 
         // Prepare packet
         myData.nodeId = NODE_ID;
         myData.gatewayId = GATEWAY_ID;
         myData.seqNum = seqCounter++;
-        myData.temperature = filteredTemp;
-        myData.tempVariance = tempFilter.getTempVariance();
-        myData.dT = tempFilter.getDt();
-        myData.dtVariance = tempFilter.getDtVariance();
+        myData.scheme = MeshManager::getScheme();
+        
+        if (myData.scheme == SCHEME_ITERATIVE) {
+            myData.temperature = consensusTemp;
+            myData.tempVariance = consensusVar;
+            myData.dT = consensusDt;
+            myData.dtVariance = consensusDtVar;
+        } else {
+            myData.temperature = filteredTemp;
+            myData.tempVariance = localVar;
+            myData.dT = localDt;
+            myData.dtVariance = localDtVar;
+        }
         
         if (fireAlarm) {
             myData.alarmSourceId = outAlarmSourceId;
@@ -94,6 +108,12 @@ void loop() {
             myData.alarmSourceId = 0;
             myData.alarmSeqNum = 0;
             // DO NOT reset myAlarmSeqNum! It must only ever increase during node uptime.
+        }
+
+        static uint8_t lastBroadcastedScheme = 255;
+        if (myData.scheme != lastBroadcastedScheme) {
+            Serial.printf("\n[MESH] Broadcasting packet with new scheme: %s\n", myData.scheme == SCHEME_ITERATIVE ? "ITERATIVE" : "DIFFUSION");
+            lastBroadcastedScheme = myData.scheme;
         }
 
         // Broadcast
@@ -110,14 +130,16 @@ void loop() {
         float localDtVar = tempFilter.getDtVariance();
         
         float consensusTemp = 0.0f;
+        float consensusVar = 0.0f;
         float consensusDt = 0.0f;
+        float consensusDtVar = 0.0f;
         bool fireAlarm = false;
         uint32_t outAlarmSourceId = 0;
         uint32_t outAlarmSeqNum = 0;
         
         // Recalculate for logging
-        MeshManager::evaluateConsensus(NODE_ID, myData.temperature, localVar, localDt, localDtVar, consensusTemp, consensusDt, fireAlarm, outAlarmSourceId, outAlarmSeqNum);
+        MeshManager::evaluateConsensus(NODE_ID, lastFilteredTemp, localVar, localDt, localDtVar, consensusTemp, consensusVar, consensusDt, consensusDtVar, fireAlarm, outAlarmSourceId, outAlarmSeqNum);
         
-        MeshManager::printStatus(NODE_ID, myData.temperature, localDt, consensusTemp, consensusDt, fireAlarm);
+        MeshManager::printStatus(NODE_ID, lastFilteredTemp, localDt, consensusTemp, consensusDt, fireAlarm);
     }
 }

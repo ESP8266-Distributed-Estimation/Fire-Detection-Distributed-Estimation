@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react';
 
+interface SensorNode {
+  id: number;
+  scheme: string;
+}
+
 interface GatewayState {
   edge_node_id: number;
   status: string;
   uptime: number;
-  connected_nodes: number[];
+  connected_nodes: SensorNode[];
   firing_nodes: number[];
 }
 
@@ -49,6 +54,18 @@ function App() {
     };
   }, []);
 
+  const handleSetScheme = async (gatewayId: number, scheme: string) => {
+    try {
+      await fetch('http://localhost:8080/api/set_scheme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gateway_id: gatewayId, scheme })
+      });
+    } catch (err) {
+      console.error('Failed to set scheme', err);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 p-8 font-sans">
       <header className="mb-10 text-center">
@@ -80,6 +97,14 @@ function App() {
                 <div className="flex items-center space-x-4">
                   <div className="h-3 w-3 bg-green-500 rounded-full shadow-[0_0_8px_#22c55e]"></div>
                   <h2 className="text-2xl font-semibold text-white">Gateway {gw.edge_node_id}</h2>
+                  <select 
+                    className="ml-4 bg-gray-700 text-white rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-indigo-500 text-sm"
+                    onChange={(e) => handleSetScheme(gw.edge_node_id, e.target.value)}
+                    defaultValue="diffusion"
+                  >
+                    <option value="diffusion">Diffusion Scheme</option>
+                    <option value="iterative">Iterative Scheme</option>
+                  </select>
                 </div>
                 <div className="text-sm text-gray-400">
                   Uptime: {gw.uptime}s
@@ -96,12 +121,12 @@ function App() {
                   <div className="text-gray-500 italic py-4">No sensor nodes connected yet.</div>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                    {gw.connected_nodes.map((nodeId) => {
-                      const isFiring = gw.firing_nodes && gw.firing_nodes.includes(nodeId);
+                    {gw.connected_nodes.map((node) => {
+                      const isFiring = gw.firing_nodes && gw.firing_nodes.includes(node.id);
                       
                       return (
                         <div 
-                          key={nodeId}
+                          key={node.id}
                           className={`border rounded-lg p-4 flex flex-col items-center justify-center transition-all ${
                             isFiring 
                               ? 'bg-red-900/50 border-red-500 hover:bg-red-900/70' 
@@ -120,9 +145,12 @@ function App() {
                               </svg>
                             )}
                           </div>
-                          <span className={`text-lg font-bold ${isFiring ? 'text-red-100' : 'text-indigo-100'}`}>Node {nodeId}</span>
+                          <span className={`text-lg font-bold ${isFiring ? 'text-red-100' : 'text-indigo-100'}`}>Node {node.id}</span>
                           <span className={`text-xs mt-1 ${isFiring ? 'text-red-300 font-bold animate-pulse' : 'text-indigo-300/70'}`}>
                             {isFiring ? '🔥 ALARM!' : 'Online'}
+                          </span>
+                          <span className="text-[10px] uppercase text-gray-400 mt-2 bg-gray-800 px-2 py-0.5 rounded-full border border-gray-700">
+                            {node.scheme}
                           </span>
                         </div>
                       );

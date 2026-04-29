@@ -24,9 +24,11 @@ namespace NetworkManager {
     struct KnownNode {
         uint32_t id;
         uint32_t lastSeen;
+        uint8_t scheme;
     };
     KnownNode knownNodes[MAX_KNOWN_NODES];
     int knownNodeCount = 0;
+    uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
     void pushToQueue(const struct_message* data) {
         int nextHead = (queueHead + 1) % QUEUE_SIZE;
@@ -54,6 +56,37 @@ namespace NetworkManager {
         if (recvData.gatewayId != EDGE_NODE_ID) return;
 
         pushToQueue(&recvData);
+    }
+
+    void OnDataSent(uint8_t *mac_addr, uint8_t status) {
+        if (status != 0) {
+            Serial.printf("[ESP-NOW] Send failed, status: %d\n", status);
+        }
+    }
+
+    void mqttCallback(char* topic, byte* payload, unsigned int length) {
+        String msg;
+        for (int i = 0; i < length; i++) {
+            msg += (char)payload[i];
+        }
+
+        String commandTopic = String(MQTT_TOPIC_COMMAND_PREFIX) + String(EDGE_NODE_ID);
+        if (String(topic) == commandTopic) {
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, msg);
+            if (!error && doc["command"] == "set_scheme") {
+                String newSchemeStr = doc["scheme"].as<String>();
+                uint8_t newScheme = (newSchemeStr == "iterative") ? SCHEME_ITERATIVE : SCHEME_DIFFUSION;
+                
+                command_message cmd;
+                cmd.gatewayId = EDGE_NODE_ID;
+                cmd.commandType = CMD_SET_SCHEME;
+                cmd.schemeType = newScheme;
+
+                esp_now_send(broadcastAddress, (uint8_t*)&cmd, sizeof(cmd));
+                Serial.printf("[MQTT->MESH] Broadcasted scheme change to %s\n", newSchemeStr.c_str());
+            }
+        }
     }
 
     void connectWiFi() {
@@ -88,6 +121,9 @@ namespace NetworkManager {
             
             if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD)) {
                 Serial.println("connected");
+                String commandTopic = String(MQTT_TOPIC_COMMAND_PREFIX) + String(EDGE_NODE_ID);
+                mqttClient.subscribe(commandTopic.c_str());
+                Serial.printf("Subscribed to %s\n", commandTopic.c_str());
             } else {
                 Serial.print("failed, rc=");
                 Serial.print(mqttClient.state());
@@ -106,8 +142,12 @@ namespace NetworkManager {
             Serial.println("ESP-NOW Init Failed");
             return;
         }
-        esp_now_set_self_role(ESP_NOW_ROLE_SLAVE); // Listen only
+        esp_now_set_self_role(ESP_NOW_ROLE_COMBO); // Needs to send commands and listen
         esp_now_register_recv_cb(OnDataRecv);
+        esp_now_register_send_cb(OnDataSent);
+        esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
+        
+        mqttClient.setCallback(mqttCallback);
         
         Serial.println("Network Subsystem Initialized.");
     }
@@ -145,7 +185,9 @@ namespace NetworkManager {
                 
                 JsonArray nodes = doc["connected_nodes"].to<JsonArray>();
                 for (int i = 0; i < knownNodeCount; i++) {
-                    nodes.add(knownNodes[i].id);
+                    JsonObject nodeObj = nodes.add<JsonObject>();
+                    nodeObj["id"] = knownNodes[i].id;
+                    nodeObj["scheme"] = knownNodes[i].scheme == SCHEME_ITERATIVE ? "iterative" : "diffusion";
                 }
                 
                 String output;
@@ -180,18 +222,33 @@ namespace NetworkManager {
         struct_message packet;
         while (popFromQueue(&packet)) {
             uint32_t now = millis();
-            // Check if this is a newly discovered node
+            // Check if this is a newly discovered node or scheme changed
             bool isNewNode = true;
             for (int i = 0; i < knownNodeCount; i++) {
                 if (knownNodes[i].id == packet.nodeId) {
                     knownNodes[i].lastSeen = now;
                     isNewNode = false;
+                    if (knownNodes[i].scheme != packet.scheme) {
+                        knownNodes[i].scheme = packet.scheme;
+                        // Publish scheme ACK immediately
+                        if (mqttClient.connected()) {
+                            JsonDocument doc;
+                            doc["gateway_id"] = EDGE_NODE_ID;
+                            doc["node_id"] = packet.nodeId;
+                            doc["scheme"] = packet.scheme == SCHEME_ITERATIVE ? "iterative" : "diffusion";
+                            String output;
+                            serializeJson(doc, output);
+                            mqttClient.publish(MQTT_TOPIC_SCHEME_ACK, output.c_str());
+                            Serial.printf("[Gateway] Node %u switched to %s scheme\n", packet.nodeId, packet.scheme == SCHEME_ITERATIVE ? "ITERATIVE" : "DIFFUSION");
+                        }
+                    }
                     break;
                 }
             }
             if (isNewNode && knownNodeCount < MAX_KNOWN_NODES) {
                 knownNodes[knownNodeCount].id = packet.nodeId;
                 knownNodes[knownNodeCount].lastSeen = now;
+                knownNodes[knownNodeCount].scheme = packet.scheme;
                 knownNodeCount++;
                 Serial.printf("[Gateway] Connected to new sensor node: %u\n", packet.nodeId);
             }

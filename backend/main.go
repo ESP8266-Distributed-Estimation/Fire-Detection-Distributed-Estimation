@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -12,12 +13,17 @@ import (
 	"github.com/rs/cors"
 )
 
+type SensorNode struct {
+	ID     int    `json:"id"`
+	Scheme string `json:"scheme"`
+}
+
 // Data structure received from the Gateway's MQTT payload
 type EdgeStatus struct {
 	EdgeNodeID     int               `json:"edge_node_id"`
 	Status         string            `json:"status"`
 	Uptime         int               `json:"uptime"`
-	ConnectedNodes []int             `json:"connected_nodes"`
+	ConnectedNodes []SensorNode      `json:"connected_nodes"`
 	FiringNodes    []int             `json:"firing_nodes"`
 	LastSeen       time.Time         `json:"-"`
 	Alarms         map[int]time.Time `json:"-"`
@@ -31,6 +37,8 @@ var (
 	// Store connected WebSocket clients
 	clients      = make(map[*websocket.Conn]bool)
 	clientsMutex sync.Mutex
+
+	mqttClient mqtt.Client
 
 	// WebSocket upgrader
 	upgrader = websocket.Upgrader{
@@ -88,6 +96,30 @@ func main() {
 			stateMutex.Unlock()
 
 			broadcastState()
+		} else if topic == "fire_alarm/scheme_ack" {
+			var ack struct {
+				GatewayID int    `json:"gateway_id"`
+				NodeID    int    `json:"node_id"`
+				Scheme    string `json:"scheme"`
+			}
+			err := json.Unmarshal(msg.Payload(), &ack)
+			if err != nil {
+				return
+			}
+			
+			log.Printf("[SCHEME ACK] Sensor Node %d on Gateway %d confirmed shift to '%s' scheme\n", ack.NodeID, ack.GatewayID, ack.Scheme)
+			
+			stateMutex.Lock()
+			if gw, ok := state[ack.GatewayID]; ok {
+				for i, node := range gw.ConnectedNodes {
+					if node.ID == ack.NodeID {
+						gw.ConnectedNodes[i].Scheme = ack.Scheme
+						break
+					}
+				}
+			}
+			stateMutex.Unlock()
+			broadcastState()
 		}
 	})
 
@@ -100,7 +132,10 @@ func main() {
 		if token := c.Subscribe("fire_alarm/alerts", 0, nil); token.Wait() && token.Error() != nil {
 			log.Fatalf("Error subscribing to alerts: %v", token.Error())
 		}
-		log.Println("Subscribed to fire_alarm/edge_status and fire_alarm/alerts")
+		if token := c.Subscribe("fire_alarm/scheme_ack", 0, nil); token.Wait() && token.Error() != nil {
+			log.Fatalf("Error subscribing to scheme_ack: %v", token.Error())
+		}
+		log.Println("Subscribed to MQTT topics")
 	}
 
 	opts.OnConnectionLost = func(c mqtt.Client, err error) {
@@ -108,11 +143,11 @@ func main() {
 	}
 
 	// Connect to MQTT
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
+	mqttClient = mqtt.NewClient(opts)
+	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
 		log.Fatalf("Failed to connect to MQTT broker: %v\nMake sure your Mosquitto broker is running on localhost:1883", token.Error())
 	}
-	defer client.Disconnect(250)
+	defer mqttClient.Disconnect(250)
 
 	// Clean up stale gateways and alarms periodically
 	go func() {
@@ -146,10 +181,35 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", handleWebSocket)
 	mux.HandleFunc("/api/state", handleStateHttp) // fallback if UI needs initial state
+	mux.HandleFunc("/api/set_scheme", handleSetScheme)
 
 	handler := cors.Default().Handler(mux)
 	log.Println("Go Backend listening on :8080 (WS on /ws)")
 	log.Fatal(http.ListenAndServe(":8080", handler))
+}
+
+func handleSetScheme(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		GatewayID int    `json:"gateway_id"`
+		Scheme    string `json:"scheme"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	topic := fmt.Sprintf("fire_alarm/command/%d", req.GatewayID)
+	msg, _ := json.Marshal(map[string]string{"command": "set_scheme", "scheme": req.Scheme})
+	if token := mqttClient.Publish(topic, 0, false, msg); token.Wait() && token.Error() != nil {
+		http.Error(w, token.Error().Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func broadcastState() {

@@ -4,6 +4,8 @@
 #include <espnow.h>
 
 namespace MeshManager {
+    uint8_t currentScheme = DEFAULT_SCHEME;
+
     Neighbor neighbors[MAX_NEIGHBORS];
     int neighborCount = 0;
     uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -119,6 +121,16 @@ namespace MeshManager {
 
     // Callbacks must be global/static in ESP8266 ESP-NOW
     void OnDataRecv(uint8_t *mac, uint8_t *incomingData, uint8_t len) {
+        if (len == sizeof(command_message)) {
+            command_message cmdData;
+            memcpy(&cmdData, incomingData, sizeof(cmdData));
+            if (cmdData.gatewayId == GATEWAY_ID && cmdData.commandType == CMD_SET_SCHEME) {
+                currentScheme = cmdData.schemeType;
+                Serial.printf("\n[COMMAND] Scheme changed to: %s\n", currentScheme == SCHEME_ITERATIVE ? "ITERATIVE" : "DIFFUSION");
+            }
+            return;
+        }
+
         // Serial.printf("\n[RAW RECV] Packet from: %02X:%02X:%02X:%02X:%02X:%02X, Len: %d\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], len);
         if (len != sizeof(struct_message)) {
             // Serial.printf("ERR: Recv len %d != expected %d\n", len, sizeof(struct_message));
@@ -167,7 +179,7 @@ namespace MeshManager {
         }
     }
 
-    void evaluateConsensus(uint32_t localNodeId, float localTemp, float localVar, float localDt, float localDtVar, float &consensusTemp, float &consensusDt, bool &fireAlarm, uint32_t &outAlarmSourceId, uint32_t &outAlarmSeqNum) {
+    void evaluateConsensus(uint32_t localNodeId, float localTemp, float localVar, float localDt, float localDtVar, float &consensusTemp, float &consensusVar, float &consensusDt, float &consensusDtVar, bool &fireAlarm, uint32_t &outAlarmSourceId, uint32_t &outAlarmSeqNum) {
         float sumTempWeights = 0.0f;
         float sumWeightedTemps = 0.0f;
         float sumDtWeights = 0.0f;
@@ -183,24 +195,60 @@ namespace MeshManager {
         sumWeightedDts += localDtWeight * localDt;
         
         // 2. Iterate through neighbors
-        for (int i = 0; i < neighborCount; i++) {
-            float nTemp = neighbors[i].temperature;
-            float nVar = neighbors[i].tempVariance;
-            float nDt = neighbors[i].dT;
-            float nDtVar = neighbors[i].dtVariance;
+        bool isTail = true;
+        
+        if (currentScheme == SCHEME_ITERATIVE) {
+            int predIdx = -1;
+            uint32_t maxPredId = 0;
             
-            float nTempWeight = 1.0f / (nVar + 0.001f);
-            sumTempWeights += nTempWeight;
-            sumWeightedTemps += nTempWeight * nTemp;
+            for (int i = 0; i < neighborCount; i++) {
+                if (neighbors[i].nodeId > localNodeId) {
+                    isTail = false;
+                } else if (neighbors[i].nodeId < localNodeId) {
+                    if (predIdx == -1 || neighbors[i].nodeId > maxPredId) {
+                        predIdx = i;
+                        maxPredId = neighbors[i].nodeId;
+                    }
+                }
+            }
             
-            float nDtWeight = 1.0f / (nDtVar + 0.001f);
-            sumDtWeights += nDtWeight;
-            sumWeightedDts += nDtWeight * nDt;
+            if (predIdx != -1) {
+                float nTemp = neighbors[predIdx].temperature;
+                float nVar = neighbors[predIdx].tempVariance;
+                float nDt = neighbors[predIdx].dT;
+                float nDtVar = neighbors[predIdx].dtVariance;
+                
+                float nTempWeight = 1.0f / (nVar + 0.001f);
+                sumTempWeights += nTempWeight;
+                sumWeightedTemps += nTempWeight * nTemp;
+                
+                float nDtWeight = 1.0f / (nDtVar + 0.001f);
+                sumDtWeights += nDtWeight;
+                sumWeightedDts += nDtWeight * nDt;
+            }
+        } else {
+            for (int i = 0; i < neighborCount; i++) {
+                float nTemp = neighbors[i].temperature;
+                float nVar = neighbors[i].tempVariance;
+                float nDt = neighbors[i].dT;
+                float nDtVar = neighbors[i].dtVariance;
+                
+                float nTempWeight = 1.0f / (nVar + 0.001f);
+                sumTempWeights += nTempWeight;
+                sumWeightedTemps += nTempWeight * nTemp;
+                
+                float nDtWeight = 1.0f / (nDtVar + 0.001f);
+                sumDtWeights += nDtWeight;
+                sumWeightedDts += nDtWeight * nDt;
+            }
         }
         
         // 3. Finalize Output
         consensusTemp = sumWeightedTemps / sumTempWeights;
+        consensusVar = 1.0f / sumTempWeights;
+        
         consensusDt = sumWeightedDts / sumDtWeights;
+        consensusDtVar = 1.0f / sumDtWeights;
         
         // 4. Alarm Logic (OR Condition)
         bool consensusAbsoluteAlarm = (consensusTemp > CRITICAL_TEMP);
@@ -209,7 +257,15 @@ namespace MeshManager {
         bool localAbsoluteAlarm = (localTemp > CRITICAL_TEMP);
         bool localFastRiseAlarm = (localDt > CRITICAL_DT) && (localTemp > BASELINE_TEMP);
         
-        bool localTrigger = consensusAbsoluteAlarm || consensusFastRiseAlarm || localAbsoluteAlarm || localFastRiseAlarm;
+        bool localTrigger = false;
+        
+        if (currentScheme == SCHEME_ITERATIVE) {
+             if (isTail) {
+                 localTrigger = consensusAbsoluteAlarm || consensusFastRiseAlarm || localAbsoluteAlarm || localFastRiseAlarm;
+             }
+        } else {
+             localTrigger = consensusAbsoluteAlarm || consensusFastRiseAlarm || localAbsoluteAlarm || localFastRiseAlarm;
+        }
 
         if (localTrigger) {
             fireAlarm = true;
@@ -291,5 +347,9 @@ namespace MeshManager {
             }
         }
         if (headerPrinted) Serial.println("--------------------------------");
+    }
+
+    uint8_t getScheme() {
+        return currentScheme;
     }
 }

@@ -2,9 +2,9 @@
 #include <Arduino.h>
 
 // --- Mesh Configuration ---
-#define NODE_ID 103 // Unique ID for this node
+#define NODE_ID 104 // Unique ID for this node
 #define GATEWAY_ID                                                             \
-  300 // ID of the Edge Node (gateway) this sensor belongs to.
+  200 // ID of the Edge Node (gateway) this sensor belongs to.
       // Packets from nodes with a different GATEWAY_ID will be ignored.
 #define WIFI_CHANNEL 11       // Must match your home WiFi router's channel!
 #define PING_INTERVAL_MS 2000 // Send ping every 2 seconds
@@ -26,3 +26,8 @@
 #define BASELINE_TEMP                                                          \
   35.0f                  // Must be at least this hot to trigger fast-rise alarm
 #define CRITICAL_DT 0.2f // Critical rate of change (deg C per second)
+
+// --- Consensus Scheme ---
+#define DEFAULT_SCHEME                                                         \
+  SCHEME_DIFFUSION // Boot with diffusion; switchable at runtime via gateway
+                   // command
