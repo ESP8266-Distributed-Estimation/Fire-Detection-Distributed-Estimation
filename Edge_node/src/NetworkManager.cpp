@@ -48,6 +48,11 @@ namespace NetworkManager {
         if (len != sizeof(struct_message)) return;
         struct_message recvData;
         memcpy(&recvData, incomingData, sizeof(recvData));
+
+        // --- Gateway Tree Isolation ---
+        // Only accept packets from sensor nodes assigned to this gateway.
+        if (recvData.gatewayId != EDGE_NODE_ID) return;
+
         pushToQueue(&recvData);
     }
 

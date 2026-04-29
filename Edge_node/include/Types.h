@@ -4,6 +4,7 @@
 // This struct must exactly match the struct in Distributed_fire_detection
 typedef struct struct_message {
     uint32_t nodeId;
+    uint32_t gatewayId;    // Which gateway tree this node belongs to
     uint32_t seqNum;
     float temperature;
     float tempVariance;

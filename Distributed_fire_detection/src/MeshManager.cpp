@@ -126,6 +126,13 @@ namespace MeshManager {
         }
         struct_message recvData;
         memcpy(&recvData, incomingData, sizeof(recvData));
+
+        // --- Gateway Tree Isolation ---
+        // Drop packets from nodes belonging to a different gateway tree.
+        if (recvData.gatewayId != GATEWAY_ID) {
+            return;
+        }
+
         updateNeighbor(mac, &recvData);
     }
 

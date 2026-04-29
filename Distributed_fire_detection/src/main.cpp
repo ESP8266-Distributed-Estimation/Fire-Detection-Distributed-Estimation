@@ -25,8 +25,9 @@ void setup() {
 
     Serial.println("\n\n====================================");
     Serial.println("--- Distributed Fire Detection ---");
-    Serial.printf("Node ID: %d\n", NODE_ID);
-    Serial.printf("MAC:     %s\n", WiFi.macAddress().c_str());
+    Serial.printf("Node ID:    %d\n", NODE_ID);
+    Serial.printf("Gateway ID: %d\n", GATEWAY_ID);
+    Serial.printf("MAC:        %s\n", WiFi.macAddress().c_str());
     Serial.println("====================================");
 
     // Prepare WiFi for ESP-NOW
@@ -75,6 +76,7 @@ void loop() {
 
         // Prepare packet
         myData.nodeId = NODE_ID;
+        myData.gatewayId = GATEWAY_ID;
         myData.seqNum = seqCounter++;
         myData.temperature = filteredTemp;
         myData.tempVariance = tempFilter.getTempVariance();
